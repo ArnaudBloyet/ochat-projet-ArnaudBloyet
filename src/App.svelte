@@ -1,5 +1,51 @@
 <script>
-    import { Menu, EllipsisVertical } from "lucide-svelte";
+    import { Menu, EllipsisVertical, Table } from "lucide-svelte";
+    import Markdown from "svelte-exmarkdown";
+
+    let token = $state(localStorage.getItem("token"));
+    let tokenInput = $state("");
+    let messages = $state([]);
+    let newMessage = $state("");
+
+    function saveToken() {
+        if (!tokenInput.trim()) return;
+        localStorage.setItem("token", tokenInput);
+        token = tokenInput;
+    }
+
+    async function askMistral() {
+        const response = await fetch(
+            "https://api.mistral.ai/v1/chat/completions",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    model: "mistral-small-latest",
+                    messages: messages,
+                }),
+            },
+        );
+        const data = await response.json();
+        console.log(data);
+        messages.push({
+            role: data.choices[0].message.role,
+            content: data.choices[0].message.content,
+        });
+    }
+
+    async function sendMessage(event) {
+        event.preventDefault();
+        if (!newMessage.trim()) return;
+        messages.push({
+            role: "user",
+            content: newMessage,
+        });
+        await askMistral();
+        newMessage = "";
+    }
 </script>
 
 <div class="container">
@@ -17,20 +63,32 @@
             </button>
         </header>
 
-        <section class="chat__messages">
-            <article class="chat__message chat__message--user"></article>
+        {#if token}
+            <section class="chat__messages">
+                {#each messages as message}
+                    <article
+                        class="chat__message chat__message--{message.role}"
+                    >
+                        <Markdown md={message.content} />
+                    </article>
+                {/each}
+            </section>
 
-            <article class="chat__message chat__message--ai"></article>
-        </section>
+            <form class="chat__form" onsubmit={sendMessage}>
+                <textarea
+                    class="chat__form__input"
+                    placeholder="Envoyer un message"
+                    rows="1"
+                    bind:value={newMessage}
+                ></textarea>
+                <button class="chat__form__button" type="submit">envoyer</button
+                >
+            </form>
+        {:else}
+            <input bind:value={tokenInput} placeholder="Votre token Mistral" />
 
-        <form class="chat__form">
-            <input
-                class="chat__form__input"
-                type="text"
-                placeholder="Envoyer un message"
-            />
-            <button class="chat__form__button" type="submit">envoyer</button>
-        </form>
+            <button type="button" onclick={saveToken}> Enregistrer </button>
+        {/if}
     </main>
 </div>
 
@@ -114,7 +172,7 @@
         background-color: #dbeafe;
     }
 
-    .chat__message--ai {
+    .chat__message--assistant {
         align-self: flex-start;
         background-color: #f3f4f6;
     }
