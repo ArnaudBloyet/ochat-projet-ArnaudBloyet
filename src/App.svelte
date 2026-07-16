@@ -1,18 +1,81 @@
 <script>
-    import { Menu, EllipsisVertical, Table } from "lucide-svelte";
+    import { Menu, EllipsisVertical, Trash2 } from "lucide-svelte";
     import { onMount } from "svelte";
     import Markdown from "svelte-exmarkdown";
 
     let token = $state(localStorage.getItem("token"));
     let tokenInput = $state("");
+    let conversations = $state([]);
+    let newConversation = $state("");
+    let currentConversation = $state(null);
     let messages = $state([]);
     let newMessage = $state("");
+    let sidebarOpen = $state(true);
+
+    function toggleSidebar() {
+        sidebarOpen = !sidebarOpen;
+    }
 
     function saveToken() {
         if (!tokenInput.trim()) return;
         localStorage.setItem("token", tokenInput);
         token = tokenInput;
     }
+
+    async function saveConversation(title) {
+        const response = await fetch(
+            "http://127.0.0.1:8090/api/collections/conversations/records",
+            {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                },
+                body: JSON.stringify({
+                    title,
+                }),
+            },
+        );
+        return await response.json();
+    }
+
+    async function getConversations() {
+        const response = await fetch(
+            "http://127.0.0.1:8090/api/collections/conversations/records?sort=created",
+        );
+        const data = await response.json();
+        console.log(data);
+        conversations = data.items;
+    }
+    onMount(async () => {
+        await getConversations();
+    });
+
+    async function saveMessage(content, role) {
+        await fetch("http://127.0.0.1:8090/api/collections/messages/records", {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+            },
+            body: JSON.stringify({
+                content,
+                role,
+                conversation: currentConversation.id,
+            }),
+        });
+    }
+
+    async function getMessages(conversationId) {
+        const response = await fetch(
+            `http://127.0.0.1:8090/api/collections/messages/records?filter=(conversation="${conversationId}")&sort=created`,
+        );
+
+        const data = await response.json();
+
+        messages = data.items;
+    }
+    // onMount(async () => {
+    //     await getMessages();
+    // });
 
     async function askMistral() {
         const mistralMessages = messages.map((message) => ({
@@ -51,33 +114,12 @@
         );
     }
 
-    async function saveMessage(content, role) {
-        await fetch("http://127.0.0.1:8090/api/collections/messages/records", {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-            },
-            body: JSON.stringify({
-                content,
-                role,
-            }),
-        });
-    }
-
-    async function getMessages() {
-        const response = await fetch(
-            "http://127.0.0.1:8090/api/collections/messages/records?sort=%2Bcreated",
-        );
-        const data = await response.json();
-        console.log(data);
-        messages = data.items;
-    }
-    onMount(async () => {
-        await getMessages();
-    });
-
     async function sendMessage(event) {
         event.preventDefault();
+        if (!currentConversation) {
+            alert("Sélectionnez une conversation.");
+            return;
+        }
         if (!newMessage.trim()) return;
         // messages.push({
         //     role: "user",
@@ -88,9 +130,38 @@
         newMessage = "";
 
         await saveMessage(message, "user");
-        await getMessages();
+        await getMessages(currentConversation.id);
         await askMistral();
-        await getMessages();
+        await getMessages(currentConversation.id);
+    }
+
+    async function createConversation(event) {
+        event.preventDefault();
+        if (!newConversation.trim()) return;
+        const conversation = await saveConversation(newConversation);
+        await getConversations();
+        currentConversation = conversation;
+        messages = [];
+        newConversation = "";
+    }
+
+    async function selectConversation(conversation) {
+        currentConversation = conversation;
+        await getMessages(conversation.id);
+    }
+
+    async function deleteConversation(id) {
+        await fetch(
+            `http://127.0.0.1:8090/api/collections/conversations/records/${id}`,
+            {
+                method: "DELETE",
+            },
+        );
+
+        await getConversations();
+
+        messages = [];
+        currentConversation = null;
     }
 
     function formatDate(date) {
@@ -115,10 +186,49 @@
 </script>
 
 <div class="container">
-    <aside></aside>
+    {#if sidebarOpen}
+        <aside class="sidebar">
+            <h1>Conversations</h1>
+            <section class="sidebar__conversations">
+                {#each conversations as conversation}
+                    <div
+                        class="sidebar__conversation"
+                        class:sidebar__conversation--active={currentConversation?.id ===
+                            conversation.id}
+                    >
+                        <button
+                            class="sidebar__conversation__title"
+                            onclick={() => selectConversation(conversation)}
+                        >
+                            {conversation.title}
+                        </button>
+
+                        <button
+                            class="sidebar__delete"
+                            onclick={() => deleteConversation(conversation.id)}
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                    </div>
+                {/each}
+            </section>
+
+            <form class="sidebar__form" onsubmit={createConversation}>
+                <input
+                    class="sidebar__input"
+                    bind:value={newConversation}
+                    type="text"
+                    placeholder="Nouvelle conversation"
+                />
+
+                <button class="sidebar__button" type="submit">Créer</button>
+            </form>
+        </aside>
+    {/if}
+
     <main class="chat">
         <header class="chat__header">
-            <button class="chat__header__button">
+            <button class="chat__header__button" onclick={toggleSidebar}>
                 <Menu size={24} />
             </button>
 
@@ -175,12 +285,19 @@
     }
 
     .container {
+        display: flex;
         height: 100vh;
         background: #2a2b36;
     }
 
     main {
         height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .chat {
+        flex: 1;
         display: flex;
         flex-direction: column;
     }
@@ -233,6 +350,7 @@
 
     .chat__message {
         width: fit-content;
+        max-width: 70%;
         padding: 1rem;
         border-radius: 12px;
     }
@@ -280,7 +398,120 @@
         border-radius: 8px;
         cursor: pointer;
         background: #50ebeb;
-        color: white;
+        color: black;
         font-weight: bold;
+    }
+
+    .sidebar {
+        width: 280px;
+        background: #202123;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid #50ebeb;
+        & h1 {
+            color: white;
+            margin: 0.8rem;
+        }
+    }
+
+    .sidebar__form {
+        padding: 1rem;
+        border-top: 1px solid #50ebeb;
+
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .sidebar__input {
+        flex: 1;
+        padding: 0.7rem;
+        border: none;
+        border-radius: 8px;
+    }
+
+    .sidebar__button {
+        width: 100%;
+        padding: 0.8rem;
+
+        border: none;
+        border-radius: 8px;
+
+        background: #50ebeb;
+        color: #202123;
+        font-weight: bold;
+
+        cursor: pointer;
+    }
+
+    .sidebar__conversations {
+        flex: 1;
+        overflow-y: auto;
+
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        padding: 1rem;
+    }
+
+    .sidebar__conversation {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        padding: 1rem;
+
+        background: #2d2f3a;
+        border-radius: 10px;
+
+        transition: 0.2s;
+    }
+
+    .sidebar__conversation__title {
+        flex: 1;
+        width: 100%;
+        height: 100%;
+        padding: 0;
+        text-align: left;
+
+        background: transparent;
+        border: none;
+
+        color: white;
+        font-size: 1rem;
+
+        cursor: pointer;
+    }
+
+    .sidebar__delete {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+
+        width: 36px;
+        height: 36px;
+
+        margin-left: 1rem;
+
+        border: none;
+        border-radius: 6px;
+
+        background: transparent;
+
+        cursor: pointer;
+    }
+
+    .sidebar__delete:hover {
+        background: #444654;
+        color: #ff6b6b;
+    }
+
+    .sidebar__conversation:hover {
+        background: #383b49;
+    }
+
+    .sidebar__conversation--active {
+        background: #2d2f3a;
+        border: 2px solid #50ebeb;
     }
 </style>
