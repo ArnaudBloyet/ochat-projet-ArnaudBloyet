@@ -1,5 +1,6 @@
 <script>
     import { Menu, EllipsisVertical, Table } from "lucide-svelte";
+    import { onMount } from "svelte";
     import Markdown from "svelte-exmarkdown";
 
     let token = $state(localStorage.getItem("token"));
@@ -14,6 +15,10 @@
     }
 
     async function askMistral() {
+        const mistralMessages = messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+        }));
         const response = await fetch(
             "https://api.mistral.ai/v1/chat/completions",
             {
@@ -24,27 +29,88 @@
                 },
                 body: JSON.stringify({
                     model: "mistral-small-latest",
-                    messages: messages,
+                    messages: mistralMessages,
                 }),
             },
         );
         const data = await response.json();
-        console.log(data);
-        messages.push({
-            role: data.choices[0].message.role,
-            content: data.choices[0].message.content,
+
+        if (!response.ok) {
+            console.error(data);
+            return;
+        }
+
+        // messages.push({
+        //     role: data.choices[0].message.role,
+        //     content: data.choices[0].message.content,
+        // });
+
+        await saveMessage(
+            data.choices[0].message.content,
+            data.choices[0].message.role,
+        );
+    }
+
+    async function saveMessage(content, role) {
+        await fetch("http://127.0.0.1:8090/api/collections/messages/records", {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+            },
+            body: JSON.stringify({
+                content,
+                role,
+            }),
         });
     }
+
+    async function getMessages() {
+        const response = await fetch(
+            "http://127.0.0.1:8090/api/collections/messages/records?sort=%2Bcreated",
+        );
+        const data = await response.json();
+        console.log(data);
+        messages = data.items;
+    }
+    onMount(async () => {
+        await getMessages();
+    });
 
     async function sendMessage(event) {
         event.preventDefault();
         if (!newMessage.trim()) return;
-        messages.push({
-            role: "user",
-            content: newMessage,
-        });
-        await askMistral();
+        // messages.push({
+        //     role: "user",
+        //     content: newMessage,
+        // });
+
+        const message = newMessage;
         newMessage = "";
+
+        await saveMessage(message, "user");
+        await getMessages();
+        await askMistral();
+        await getMessages();
+    }
+
+    function formatDate(date) {
+        const messageDate = new Date(date);
+        const today = new Date();
+
+        const isToday = messageDate.toDateString() === today.toDateString();
+
+        if (isToday) {
+            return messageDate.toLocaleTimeString("fr-FR", {
+                hour: "2-digit",
+                minute: "2-digit",
+            });
+        }
+
+        return messageDate.toLocaleDateString("fr-FR", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+        });
     }
 </script>
 
@@ -70,6 +136,10 @@
                         class="chat__message chat__message--{message.role}"
                     >
                         <Markdown md={message.content} />
+
+                        <span class="chat__message__date">
+                            {formatDate(message.created)}
+                        </span>
                     </article>
                 {/each}
             </section>
@@ -162,7 +232,7 @@
     }
 
     .chat__message {
-        max-width: 70%;
+        width: fit-content;
         padding: 1rem;
         border-radius: 12px;
     }
@@ -171,10 +241,23 @@
         align-self: flex-end;
         background-color: #dbeafe;
     }
+    .chat__message--user .chat__message__date {
+        text-align: right;
+    }
 
     .chat__message--assistant {
         align-self: flex-start;
         background-color: #f3f4f6;
+    }
+    .chat__message--assistant .chat__message__date {
+        text-align: left;
+    }
+
+    .chat__message__date {
+        display: block;
+        margin-top: 0.5rem;
+        font-size: 0.75rem;
+        color: #777;
     }
 
     .chat__form {
